@@ -17,7 +17,13 @@
 
 ## 使用方法
 
-首先，下载 `hfd.py` 并确保 Python 环境已安装。
+首先，下载 `hfd.py` 并确保 `Python`, `aria2c`, `git` 以及 `git-lfs` 已安装。
+
+>Ubuntu 下安装 `aria2c` `git` `git-lfs` 
+>```bash
+>sudo apt update
+>sudo apt install aria2 git git-lfs
+>```
 
 ### 命令行参数
 
@@ -80,3 +86,7 @@ $ python hfd.py jxu124/OpenX-Embodiment -x 4 --dataset --local_dir /data/open-x-
 ...
 
 ```
+
+### 致谢
+
+感谢 [padeoe](https://gist.github.com/padeoe/697678ab8e528b85a2a7bddafea1fa4f) 提供的 `hfd.sh` 脚本，为 `hfd.py` 的开发提供了基础。
