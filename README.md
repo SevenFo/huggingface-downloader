@@ -8,12 +8,14 @@
 - 🚀 **多线程下载**: 利用多线程加速下载过程。
 - 🚫 **文件排除**: 使用 `--exclude` 或 `--include` 跳过或指定文件，节省时间。
 - 🔐 **认证支持**: 对于需要登录的模型，使用 `--hf_username` 和 `--hf_token` 进行认证。
-- 🪞 **镜像站支持**: 通过 `HF_ENDPOINT` 环境变量设置镜像站。
+- 🪞 **镜像站支持**: 通过 `--endpoint` 参数或 `HF_ENDPOINT` 环境变量设置镜像站。
 - 🌍 **代理支持**: 通过 `HTTPS_PROXY` 环境变量设置代理。
 - 📦 **简单依赖**: 仅依赖 `git` 和 `aria2c/wget`。
 - 🔁 **自动重试**: 使用 `--max_retries` 来指定一个下载任务的重试次数
 - ☑️ **哈希验证**: 使用 `--verify_hash` 来验证本地文件和 `Git LFS` 的哈希值是否一致，如果不一致则重新下载。
 - ⏬ **跳过已下载**: 使用 `Git LFS` 自动区分目标文件的下载状态
+- 🔄 **浅克隆支持**: 默认使用 `--depth=1` 进行浅克隆，减小下载体积
+- 🗑️ **自动清理**: 默认下载完成后移除 `.git` 目录，避免仓库嵌套问题
 
 ## 使用方法
 
@@ -34,16 +36,21 @@ python hfd.py -h
 #### 参数说明
 
 - `repo_id`: Hugging Face 仓库 ID，格式为 `org/repo_name`。
-- `--include`: (可选) 指定包含下载的文件模式，支持多个模式。
+- `--include`: (可选) 指定包含下载的文件模式，支持多个模式。支持目录模式如 `onnx/*`。
 - `--exclude`: (可选) 指定排除下载的文件模式，支持多个模式。
 - `--hf_username`: (可选) Hugging Face 用户名，用于认证（不是邮箱）。
 - `--hf_token`: (可选) Hugging Face 令牌，用于认证。
+- `--endpoint`: (可选) 指定Hugging Face镜像站点，默认使用环境变量`HF_ENDPOINT`或`https://huggingface.co`。
 - `--tool`: (可选) 下载工具，可以是 `aria2c`（默认）或 `wget`。
 - `-x`: (可选) `aria2c` 的下载线程数，默认为 4。
 - `--dataset`: (可选) 标志，表示下载数据集。
 - `--local_dir`: (可选) 本地存储模型或数据集的目录路径。
 - `--max_retries`: (可选) 最大重试次数，默认为 10。
 - `--verify_hash`: (可选) 启用哈希验证，将对 `Git LFS` 标记为已下载的文件进行哈希验证，不通过则重新下载。
+- `--depth-1`: (默认启用) 使用 `--depth=1` 进行浅克隆，只下载最新提交，减小下载体积。
+- `--no-depth-1`: (可选) 不使用浅克隆，下载完整的提交历史。
+- `--remove_git`: (默认启用) 下载完成后移除 `.git` 目录，避免Git仓库嵌套问题。
+- `--no-remove_git`: (可选) 保留 `.git` 目录及相关Git历史。
 
 #### 示例
 
@@ -70,6 +77,30 @@ python hfd.py bigscience/bloom-560m --exclude *.safetensors
 ```bash
 python hfd.py bigscience/bloom-560m -x 8
 ```
+
+只下载特定目录中的文件：
+
+```bash
+python hfd.py intfloat/e5-base-v2 --include "onnx/*"
+```
+
+使用镜像站点：
+
+```bash
+python hfd.py intfloat/e5-base-v2 --endpoint https://hf-mirror.com
+```
+
+保留完整Git历史：
+
+```bash
+python hfd.py intfloat/e5-base-v2 --no-depth-1 --no-remove_git
+```
+
+在Git仓库中使用：
+
+脚本会自动检测当前目录是否为Git仓库，并采取以下措施：
+1. 使用带时间戳的临时目录名（例如`e5-base-v2_1744471719`）避免名称冲突
+2. 默认克隆完成后会删除`.git`目录避免Git仓库嵌套问题
 
 ### 输出
 
