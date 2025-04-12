@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import sys
 import subprocess
@@ -40,6 +41,11 @@ def parse_args():
     parser.add_argument("--hf_username", help="Hugging Face 用户名，用于认证。")
     parser.add_argument("--hf_token", help="Hugging Face 令牌，用于认证。")
     parser.add_argument(
+        "--endpoint",
+        default=os.environ.get("HF_ENDPOINT", "https://huggingface.co"),
+        help="Hugging Face 端点，默认为环境变量 HF_ENDPOINT 或 https://huggingface.co",
+    )
+    parser.add_argument(
         "--tool",
         choices=["aria2c", "wget"],
         default="aria2c",
@@ -63,6 +69,18 @@ def parse_args():
         help="最大重试次数，默认为 10。",
     )
     parser.add_argument("--verify_hash", action="store_true", help="启用哈希验证。")
+    parser.add_argument(
+        "--remove_git",
+        action="store_true",
+        help="下载完成后移除.git目录，避免Git仓库嵌套问题。",
+        default=True,
+    )
+    parser.add_argument(
+        "--depth-1",
+        action="store_true",
+        help="使用 --depth=1 进行浅克隆，只下载最新提交，减小下载体积。默认启用。",
+        default=True,
+    )
     return parser.parse_args()
 
 
@@ -73,16 +91,23 @@ def check_command(command):
 
 
 def ensure_ownership(repo_dir):
+    # 确保目录存在
+    if not os.path.isdir(repo_dir):
+        print_color(f"目录 {repo_dir} 不存在，无法确保所有权", RED)
+        return
+
     try:
         subprocess.check_output(
             ["git", "status"], cwd=repo_dir, stderr=subprocess.STDOUT
         )
     except subprocess.CalledProcessError as e:
-        if "detected dubious ownership" in e.output.decode():
+        if hasattr(e, "output") and "detected dubious ownership" in e.output.decode():
             subprocess.run(
                 ["git", "config", "--global", "--add", "safe.directory", repo_dir]
             )
             print_color(f"已将 {repo_dir} 标记为 git 安全目录。", YELLOW)
+        else:
+            print_color(f"在 {repo_dir} 运行 git status 时出错: {e}", RED)
 
 
 def run_command(command):
@@ -110,7 +135,16 @@ def is_file_downloaded(file_path, expected_hash):
 
 
 def download_file(url, file_path, tool, threads, token=None, max_retries=10):
-    dir_path = os.path.dirname(file_path)
+    # 确保文件路径非空
+    if not file_path:
+        print_color(f"错误: 收到空文件路径", RED)
+        return 0
+
+    # 使用绝对路径构建目标目录和文件
+    dir_path = os.path.dirname(os.path.abspath(file_path))
+    filename = os.path.basename(file_path)
+
+    # 确保目标目录存在
     os.makedirs(dir_path, exist_ok=True)
 
     if tool == "wget":
@@ -118,9 +152,9 @@ def download_file(url, file_path, tool, threads, token=None, max_retries=10):
         if token:
             command = f'wget --header="Authorization: Bearer {token}" -c "{url}" -O "{file_path}"'
     else:  # aria2c
-        command = f'aria2c --console-log-level=error --file-allocation=none -x {threads} -s {threads} -k 1M -c "{url}" -d "{dir_path}" -o "{os.path.basename(file_path)}"'
+        command = f'aria2c --console-log-level=error --file-allocation=none -x {threads} -s {threads} -k 1M -c "{url}" -d "{dir_path}" -o "{filename}"'
         if token:
-            command = f'aria2c --header="Authorization: Bearer {token}" --console-log-level=error --file-allocation=none -x {threads} -s {threads} -k 1M -c "{url}" -d "{dir_path}" -o "{os.path.basename(file_path)}"'
+            command = f'aria2c --header="Authorization: Bearer {token}" --console-log-level=error --file-allocation=none -x {threads} -s {threads} -k 1M -c "{url}" -d "{dir_path}" -o "{filename}"'
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -163,115 +197,230 @@ def main():
     check_command("git-lfs")
     check_command(args.tool)
 
-    hf_endpoint = os.getenv("HF_ENDPOINT", "https://huggingface.co")
+    # 使用传入的endpoint参数
+    hf_endpoint = args.endpoint
     repo_id = f"datasets/{args.repo_id}" if args.dataset else args.repo_id
     local_dir = args.local_dir or repo_id.split("/")[-1]
 
-    if os.path.isdir(os.path.join(local_dir, ".git")):
-        print_color(f"{local_dir} 已存在，跳过克隆。", YELLOW)
-        os.chdir(local_dir)
-        ensure_ownership(local_dir)
-        run_command("GIT_LFS_SKIP_SMUDGE=1 git pull")
-    else:
-        repo_url = f"{hf_endpoint}/{repo_id}"
-        if args.hf_username and args.hf_token:
-            repo_url = (
-                f"https://{args.hf_username}:{args.hf_token}@{hf_endpoint}/{repo_id}"
-            )
+    # 获取当前工作目录以便后续恢复
+    original_dir = os.getcwd()
 
-        run_command(f"GIT_LFS_SKIP_SMUDGE=1 git clone {repo_url} {local_dir}")
-        os.chdir(local_dir)
-        ensure_ownership(local_dir)
+    # 检查当前目录是否已经是一个Git仓库
+    in_git_repo = False
+    try:
+        subprocess.check_output(
+            ["git", "rev-parse", "--is-inside-work-tree"], stderr=subprocess.STDOUT
+        )
+        in_git_repo = True
+        print_color("检测到在Git仓库内运行脚本", YELLOW)
+    except subprocess.CalledProcessError:
+        pass
 
-        for file in (
-            subprocess.check_output(["git", "lfs", "ls-files"]).decode().splitlines()
-        ):
-            file_path = file.split(" ")[-1]
-            open(file_path, "w").close()  # 截断文件
+    # 如果在Git仓库中运行且用户未指定本地目录，则使用临时目录名避免冲突
+    if in_git_repo and not args.local_dir:
+        temp_suffix = int(time.time())
+        local_dir = f"{local_dir}_{temp_suffix}"
+        print_color(f"在Git仓库中运行，使用临时目录名: {local_dir}", YELLOW)
 
-    include_patterns = args.include or []
-    exclude_patterns = args.exclude or []
+    try:
+        # 记录模型目录的绝对路径，避免路径问题
+        model_dir = os.path.abspath(os.path.join(original_dir, local_dir))
 
-    def matches_patterns(file, patterns):
-        return any(fnmatch.fnmatch(file, pattern) for pattern in patterns)
-
-    files = subprocess.check_output(["git", "lfs", "ls-files"]).decode().splitlines()
-    files_to_download = []
-    file_checks = []
-
-    for file in files:
-        file_path = file.split(" ")[-1]
-        partial_hash = file.split(" ")[0]  # 获取 Git LFS 的部分哈希
-        is_downloaded = file.split(" ")[1] == "*"
-        url = f"{hf_endpoint}/{repo_id}/resolve/main/{file_path}"
-
-        if include_patterns and not matches_patterns(file_path, include_patterns):
-            print_color(f"跳过 {file_path} (不匹配包含模式)", YELLOW)
-            continue
-        if exclude_patterns and matches_patterns(file_path, exclude_patterns):
-            print_color(f"跳过 {file_path} (匹配排除模式)", YELLOW)
-            continue
-        if args.verify_hash and is_downloaded:
-            print_color(f"文件 {file_path} 已下载，添加到哈希校验队列。", YELLOW)
-            file_checks.append((file_path, partial_hash))
-        elif not is_downloaded:
-            print_color(f"文件 {file_path} 未下载，添加到下载队列。", YELLOW)
-            files_to_download.append((url, file_path, args.tool, args.x, args.hf_token))
+        if os.path.isdir(os.path.join(model_dir, ".git")):
+            print_color(f"{model_dir} 已存在，跳过克隆。", YELLOW)
+            os.chdir(model_dir)
+            ensure_ownership(model_dir)
+            run_command("GIT_LFS_SKIP_SMUDGE=1 git pull")
         else:
-            print_color(f"文件 {file_path} 已经存在且未开启哈希验证，跳过下载。", GREEN)
+            repo_url = f"{hf_endpoint}/{repo_id}"
+            if args.hf_username and args.hf_token:
+                repo_url = f"https://{args.hf_username}:{args.hf_token}@{hf_endpoint.replace('https://', '')}/{repo_id}"
 
-    total_files = len(file_checks)
-    start_time = time.time()
-    completed_files = 0
-
-    # 多进程校验文件哈希
-    with ProcessPoolExecutor(max_workers=4) as executor:
-        futures = [
-            executor.submit(check_file_hash, file_info) for file_info in file_checks
-        ]
-
-        for future in as_completed(futures):
-            file_path, is_downloaded = future.result()
-            if is_downloaded:
-                print_color(f"文件 {file_path} 校验通过。", GREEN)
-            else:
-                partial_hash = next(
-                    info[1] for info in file_checks if info[0] == file_path
+            # 如果目录已存在但不是Git仓库，提醒用户
+            if os.path.exists(model_dir):
+                print_color(
+                    f"警告: 目录 {model_dir} 已存在但不是Git仓库。克隆可能失败。",
+                    YELLOW,
                 )
-                url = f"{hf_endpoint}/{repo_id}/resolve/main/{file_path}"
-                print_color(f"文件 {file_path} 校验失败，添加到下载队列。", YELLOW)
+                user_input = input("是否继续? [y/N]: ").lower()
+                if user_input != "y":
+                    print_color("操作已取消。", RED)
+                    return
+
+            # 显示浅克隆提示
+            if args.depth_1:
+                print_color(
+                    "使用 --depth=1 进行浅克隆，只下载最新提交，减小下载体积。", YELLOW
+                )
+                clone_command = (
+                    f"GIT_LFS_SKIP_SMUDGE=1 git clone --depth=1 {repo_url} {local_dir}"
+                )
+            else:
+                print_color(
+                    "进行完整克隆，下载所有历史记录。这可能需要更长的时间。", YELLOW
+                )
+                clone_command = (
+                    f"GIT_LFS_SKIP_SMUDGE=1 git clone {repo_url} {local_dir}"
+                )
+
+            run_command(clone_command)
+
+            # 确保目录已成功创建后再进入
+            if not os.path.isdir(model_dir):
+                print_color(f"无法找到 {model_dir} 目录，克隆可能失败", RED)
+                return
+
+            os.chdir(model_dir)
+            ensure_ownership(model_dir)
+
+            # 检查git lfs是否可用并处理文件
+            try:
+                for file in (
+                    subprocess.check_output(["git", "lfs", "ls-files"])
+                    .decode()
+                    .splitlines()
+                ):
+                    file_path = file.split(" ")[-1]
+                    file_full_path = os.path.join(model_dir, file_path)
+                    os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
+                    open(file_full_path, "w").close()  # 截断文件
+            except subprocess.CalledProcessError as e:
+                print_color(f"获取LFS文件列表失败: {e}", RED)
+                return
+
+        include_patterns = args.include or []
+        exclude_patterns = args.exclude or []
+
+        def matches_patterns(file, patterns):
+            return any(fnmatch.fnmatch(file, pattern) for pattern in patterns)
+
+        try:
+            files = (
+                subprocess.check_output(["git", "lfs", "ls-files"])
+                .decode()
+                .splitlines()
+            )
+        except subprocess.CalledProcessError as e:
+            print_color(f"获取LFS文件列表失败: {e}", RED)
+            return
+
+        files_to_download = []
+        file_checks = []
+
+        for file in files:
+            parts = file.split(" ")
+            if len(parts) < 3:
+                continue
+
+            partial_hash = parts[0]  # 获取 Git LFS 的部分哈希
+            status = parts[1]  # 获取文件状态
+            file_path = parts[-1]  # 获取文件路径
+
+            is_downloaded = status == "*"
+            url = f"{hf_endpoint}/{repo_id}/resolve/main/{file_path}"
+
+            if include_patterns and not matches_patterns(file_path, include_patterns):
+                print_color(f"跳过 {file_path} (不匹配包含模式)", YELLOW)
+                continue
+            if exclude_patterns and matches_patterns(file_path, exclude_patterns):
+                print_color(f"跳过 {file_path} (匹配排除模式)", YELLOW)
+                continue
+            if args.verify_hash and is_downloaded:
+                print_color(f"文件 {file_path} 已下载，添加到哈希校验队列。", YELLOW)
+                file_checks.append((file_path, partial_hash))
+            elif not is_downloaded:
+                print_color(f"文件 {file_path} 未下载，添加到下载队列。", YELLOW)
                 files_to_download.append(
                     (url, file_path, args.tool, args.x, args.hf_token, args.max_retries)
                 )
+            else:
+                print_color(
+                    f"文件 {file_path} 已经存在且未开启哈希验证，跳过下载。", GREEN
+                )
 
-    total_files_to_download = len(files_to_download)
-    start_time = time.time()
-    completed_files = 0
+        # 后续代码不变...
+        total_files = len(file_checks)
+        start_time = time.time()
+        completed_files = 0
 
-    with ProcessPoolExecutor(max_workers=32) as executor:
-        futures = [
-            executor.submit(
-                download_file, url, file_path, tool, threads, token, max_retries
-            )
-            for url, file_path, tool, threads, token, max_retries in files_to_download
-        ]
+        # 多进程校验文件哈希
+        with ProcessPoolExecutor(max_workers=4) as executor:
+            futures = [
+                executor.submit(check_file_hash, file_info) for file_info in file_checks
+            ]
 
-        for future in as_completed(futures):
-            elapsed_time = future.result()
-            completed_files += 1
-            total_elapsed_time = time.time() - start_time
-            avg_time_per_file = total_elapsed_time / completed_files
-            remaining_files = total_files_to_download - completed_files
-            estimated_remaining_time = avg_time_per_file * remaining_files
+            for future in as_completed(futures):
+                file_path, is_downloaded = future.result()
+                if is_downloaded:
+                    print_color(f"文件 {file_path} 校验通过。", GREEN)
+                else:
+                    partial_hash = next(
+                        info[1] for info in file_checks if info[0] == file_path
+                    )
+                    url = f"{hf_endpoint}/{repo_id}/resolve/main/{file_path}"
+                    print_color(f"文件 {file_path} 校验失败，添加到下载队列。", YELLOW)
+                    files_to_download.append(
+                        (
+                            url,
+                            file_path,
+                            args.tool,
+                            args.x,
+                            args.hf_token,
+                            args.max_retries,
+                        )
+                    )
 
-            print_color(
-                f"已完成 {completed_files}/{total_files_to_download} 个文件。"
-                f"用时：{total_elapsed_time:.2f} 秒。"
-                f"预计剩余时间：{estimated_remaining_time:.2f} 秒。",
-                BLUE,
-            )
+        total_files_to_download = len(files_to_download)
+        if total_files_to_download == 0:
+            print_color("没有需要下载的文件。", GREEN)
+            return
 
-    print_color("下载完成。", GREEN)
+        start_time = time.time()
+        completed_files = 0
+
+        with ProcessPoolExecutor(max_workers=32) as executor:
+            futures = [
+                executor.submit(
+                    download_file, url, file_path, tool, threads, token, max_retries
+                )
+                for url, file_path, tool, threads, token, max_retries in files_to_download
+            ]
+
+            for future in as_completed(futures):
+                try:
+                    elapsed_time = future.result()
+                    completed_files += 1
+                    total_elapsed_time = time.time() - start_time
+                    avg_time_per_file = total_elapsed_time / completed_files
+                    remaining_files = total_files_to_download - completed_files
+                    estimated_remaining_time = avg_time_per_file * remaining_files
+
+                    print_color(
+                        f"已完成 {completed_files}/{total_files_to_download} 个文件。"
+                        f"用时：{total_elapsed_time:.2f} 秒。"
+                        f"预计剩余时间：{estimated_remaining_time:.2f} 秒。",
+                        BLUE,
+                    )
+                except Exception as e:
+                    print_color(f"下载文件失败: {e}", RED)
+
+        if args.remove_git:
+            git_dir = os.path.join(model_dir, ".git")
+            if os.path.isdir(git_dir):
+                print_color(f"移除 {git_dir} 目录以避免Git仓库嵌套问题。", YELLOW)
+                user_input = input("是否继续? [y/N]: ").lower()
+                if user_input == "y":
+                    shutil.rmtree(git_dir)
+                    print_color(f"已移除 {git_dir} 目录。", GREEN)
+                else:
+                    print_color(f"保留 {git_dir} 目录。", YELLOW)
+
+        print_color("下载完成。", GREEN)
+    except Exception as e:
+        print_color(f"发生错误: {e}", RED)
+    finally:
+        # 恢复原始工作目录
+        os.chdir(original_dir)
 
 
 if __name__ == "__main__":
