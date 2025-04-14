@@ -10,10 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypitest
-      url: https://test.pypi.org/p/siky-hfd 
+      url: https://test.pypi.org/p/siky-hfd
     permissions:
-      contents: read # 只需要读取权限来检出代码
-      # 如果 pypitest 环境使用 OIDC 受信任发布，则需要 id-token: write
+      contents: write # 需要 write 权限来创建 Release 和上传文件
 
     steps:
     - name: Checkout repository
@@ -36,6 +35,47 @@ jobs:
       # 只发布到 TestPyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
-        # 使用 TestPyPI 的 API Token (如果 pypitest 环境没有配置 OIDC)
-        password: ${{ secrets.PYPI_API_TOKEN }}
-        repository_url: https://test.pypi.org/legacy/ # 指定 TestPyPI 地址
+        # 使用 TestPyPI 的 API Token
+        password: ${{ secrets.PYPI_API_TOKEN }} 
+        repository-url: https://test.pypi.org/legacy/ 
+
+    - name: Create GitHub Release for Test Tag
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you don't need to create it
+      with:
+        tag_name: ${{ github.ref_name }} # 使用触发工作流的标签名
+        release_name: Draft Release ${{ github.ref_name }} (TestPyPI)
+        body: |
+          Test release draft for ${{ github.ref_name }}. Published to TestPyPI.
+        draft: true
+        prerelease: false
+
+    - name: Get asset names
+      id: get_asset_names
+      run: |
+        echo "WHL_PATH=$(ls dist/*.whl | head -n 1)" >> $GITHUB_ENV
+        echo "SDIST_PATH=$(ls dist/*.tar.gz | head -n 1)" >> $GITHUB_ENV
+        echo "WHL_NAME=$(basename $(ls dist/*.whl | head -n 1))" >> $GITHUB_ENV
+        echo "SDIST_NAME=$(basename $(ls dist/*.tar.gz | head -n 1))" >> $GITHUB_ENV
+
+    - name: Upload Release Assets (Wheel)
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }} # 从上一步获取上传 URL
+        asset_path: ${{ env.WHL_PATH }}
+        asset_name: ${{ env.WHL_NAME }}
+        asset_content_type: application/zip
+
+    - name: Upload Release Assets (sdist)
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }} # 从上一步获取上传 URL
+        asset_path: ${{ env.SDIST_PATH }}
+        asset_name: ${{ env.SDIST_NAME }}
+        asset_content_type: application/gzip
