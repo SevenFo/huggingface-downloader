@@ -84,7 +84,7 @@ def parse_args():
         "--remove_git",
         action="store_true",
         help="下载完成后移除.git目录，避免Git仓库嵌套问题。",
-        default=True,
+        default=False,
     )
     parser.add_argument(
         "--depth-1",
