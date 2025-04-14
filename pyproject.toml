@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "siky-hfd" 
-version = "0.1.0" 
+version = "0.1.1" 
 description = "从 Hugging Face 或 ModelScope 使用提供的 repo ID 下载模型或数据集。"
 readme = "README.md"
 license = "MIT" 
