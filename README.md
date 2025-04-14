@@ -41,10 +41,10 @@
 pip install -e .
 ```
 
-**或者，如果发布到 PyPI:**
+**或者，通过 TestPyPI:**
 
 ```bash
-pip install huggingface-downloader
+pip install -i https://test.pypi.org/simple/ siky-hfd
 ```
 
 ## 使用方法
