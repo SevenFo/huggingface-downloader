@@ -373,6 +373,7 @@ def main():
 
         files_to_download = []
         file_checks = []
+        files_to_verify_after_download = []  # 新增：用于存储下载后需要校验的文件
 
         for file in files:
             parts = file.split(" ")
@@ -395,42 +396,19 @@ def main():
             if exclude_patterns and matches_patterns(file_path, exclude_patterns):
                 print_color(f"跳过 {file_path} (匹配排除模式)", YELLOW)
                 continue
-            if args.verify_hash and is_downloaded:
-                print_color(f"文件 {file_path} 已下载，添加到哈希校验队列。", YELLOW)
-                file_checks.append((file_path, partial_hash))
-            elif not is_downloaded:
-                print_color(f"文件 {file_path} 未下载，添加到下载队列。", YELLOW)
-                files_to_download.append(
-                    (url, file_path, args.tool, args.x, args.hf_token, args.max_retries)
-                )
-            else:
-                print_color(
-                    f"文件 {file_path} 已经存在且未开启哈希验证，跳过下载。", GREEN
-                )
 
-        # 后续代码不变...
-        total_files = len(file_checks)
-        start_time = time.time()
-        completed_files = 0
-
-        # 多进程校验文件哈希
-        with ProcessPoolExecutor(max_workers=4) as executor:
-            futures = [
-                executor.submit(check_file_hash, file_info) for file_info in file_checks
-            ]
-
-            for future in as_completed(futures):
-                file_path, is_downloaded = future.result()
+            # 修改这里的逻辑
+            if args.verify_hash:
                 if is_downloaded:
-                    print_color(f"文件 {file_path} 校验通过。", GREEN)
+                    print_color(
+                        f"文件 {file_path} 已下载，添加到哈希校验队列。", YELLOW
+                    )
+                    file_checks.append((file_path, partial_hash))
                 else:
-                    partial_hash = next(
-                        info[1] for info in file_checks if info[0] == file_path
+                    print_color(
+                        f"文件 {file_path} 未下载，添加到下载队列，并将在下载后校验。",
+                        YELLOW,
                     )
-                    url = get_download_url(
-                        endpoint, repo_id_for_url, file_path, args.source, args.dataset
-                    )
-                    print_color(f"文件 {file_path} 校验失败，添加到下载队列。", YELLOW)
                     files_to_download.append(
                         (
                             url,
@@ -441,40 +419,144 @@ def main():
                             args.max_retries,
                         )
                     )
+                    # 同时添加到下载后校验列表
+                    files_to_verify_after_download.append((file_path, partial_hash))
+            elif not is_downloaded:  # 如果未开启校验，只添加未下载的文件到下载列表
+                print_color(f"文件 {file_path} 未下载，添加到下载队列。", YELLOW)
+                files_to_download.append(
+                    (url, file_path, args.tool, args.x, args.hf_token, args.max_retries)
+                )
+            else:  # 未开启校验且已下载
+                print_color(f"文件 {file_path} 已经存在且未开启哈希验证，跳过。", GREEN)
 
+        # 1. 校验已存在的文件 (如果开启了 --verify_hash)
+        if file_checks:
+            print_color("开始校验已存在文件的哈希...", BLUE)
+            # ... (校验 file_checks 的代码保持不变) ...
+            with ProcessPoolExecutor(max_workers=4) as executor:
+                futures = [
+                    executor.submit(check_file_hash, file_info)
+                    for file_info in file_checks
+                ]
+                # ... (处理 futures 的代码保持不变) ...
+                for future in as_completed(futures):
+                    file_path, is_valid = future.result()
+                    if is_valid:
+                        print_color(f"文件 {file_path} 校验通过。", GREEN)
+                    else:
+                        # 校验失败，需要重新下载
+                        partial_hash = next(
+                            info[1] for info in file_checks if info[0] == file_path
+                        )
+                        url = get_download_url(
+                            endpoint,
+                            repo_id_for_url,
+                            file_path,
+                            args.source,
+                            args.dataset,
+                        )
+                        print_color(
+                            f"文件 {file_path} 校验失败，添加到下载队列。", YELLOW
+                        )
+                        files_to_download.append(
+                            (
+                                url,
+                                file_path,
+                                args.tool,
+                                args.x,
+                                args.hf_token,
+                                args.max_retries,
+                            )
+                        )
+                        # 如果校验失败，也需要在下载后重新校验
+                        if args.verify_hash:
+                            files_to_verify_after_download.append(
+                                (file_path, partial_hash)
+                            )
+
+        # 2. 下载需要下载或校验失败的文件
         total_files_to_download = len(files_to_download)
         if total_files_to_download == 0:
             print_color("没有需要下载的文件。", GREEN)
-            return
+            # return # 不要在这里返回，因为可能还需要校验新下载的文件
+        else:
+            print_color(f"开始下载 {total_files_to_download} 个文件...", BLUE)
+            start_time = time.time()
+            completed_files = 0
+            download_successful_files = []  # 记录成功下载的文件路径
 
-        start_time = time.time()
-        completed_files = 0
-
-        with ProcessPoolExecutor(max_workers=32) as executor:
-            futures = [
-                executor.submit(
-                    download_file, url, file_path, tool, threads, token, max_retries
-                )
-                for url, file_path, tool, threads, token, max_retries in files_to_download
-            ]
-
-            for future in as_completed(futures):
-                try:
-                    elapsed_time = future.result()
-                    completed_files += 1
-                    total_elapsed_time = time.time() - start_time
-                    avg_time_per_file = total_elapsed_time / completed_files
-                    remaining_files = total_files_to_download - completed_files
-                    estimated_remaining_time = avg_time_per_file * remaining_files
-
-                    print_color(
-                        f"已完成 {completed_files}/{total_files_to_download} 个文件。"
-                        f"用时：{total_elapsed_time:.2f} 秒。"
-                        f"预计剩余时间：{estimated_remaining_time:.2f} 秒。",
-                        BLUE,
+            with ProcessPoolExecutor(max_workers=32) as executor:
+                # ... (下载文件的 futures 提交代码保持不变) ...
+                futures = [
+                    executor.submit(
+                        download_file, url, file_path, tool, threads, token, max_retries
                     )
-                except Exception as e:
-                    print_color(f"下载文件失败: {e}", RED)
+                    for url, file_path, tool, threads, token, max_retries in files_to_download
+                ]
+
+                for i, future in enumerate(as_completed(futures)):
+                    # 获取对应任务的文件路径
+                    original_task_info = files_to_download[i]
+                    current_file_path = original_task_info[1]
+                    try:
+                        elapsed_time = future.result()
+                        if (
+                            elapsed_time is not None
+                        ):  # 假设 download_file 成功时返回时间，失败时返回 None 或抛异常
+                            completed_files += 1
+                            download_successful_files.append(
+                                current_file_path
+                            )  # 记录成功下载的文件
+                            total_elapsed_time = time.time() - start_time
+                            avg_time_per_file = (
+                                total_elapsed_time / completed_files
+                                if completed_files > 0
+                                else 0
+                            )
+                            remaining_files = total_files_to_download - completed_files
+                            estimated_remaining_time = (
+                                avg_time_per_file * remaining_files
+                            )
+
+                            print_color(
+                                f"已完成 {completed_files}/{total_files_to_download} 个文件下载。"
+                                f"用时：{total_elapsed_time:.2f} 秒。"
+                                f"预计剩余时间：{estimated_remaining_time:.2f} 秒。",
+                                BLUE,
+                            )
+                        else:
+                            print_color(
+                                f"下载文件 {current_file_path} 失败 (未返回有效时间)。",
+                                RED,
+                            )
+                    except Exception as e:
+                        print_color(f"下载文件 {current_file_path} 失败: {e}", RED)
+
+        # 3. 校验刚刚下载完成的文件 (如果开启了 --verify_hash)
+        if args.verify_hash and files_to_verify_after_download:
+            print_color("开始校验新下载文件的哈希...", BLUE)
+            verification_needed_after_download = [
+                item
+                for item in files_to_verify_after_download
+                if item[0] in download_successful_files  # 只校验成功下载的文件
+            ]
+            if verification_needed_after_download:
+                with ProcessPoolExecutor(max_workers=4) as executor:
+                    futures = [
+                        executor.submit(check_file_hash, file_info)
+                        for file_info in verification_needed_after_download
+                    ]
+                    for future in as_completed(futures):
+                        file_path, is_valid = future.result()
+                        if is_valid:
+                            print_color(f"新下载的文件 {file_path} 校验通过。", GREEN)
+                        else:
+                            print_color(
+                                f"新下载的文件 {file_path} 校验失败！请检查文件或重新下载。",
+                                RED,
+                            )
+            else:
+                print_color("没有成功下载的文件需要进行下载后校验。", YELLOW)
 
         if args.remove_git:
             git_dir = os.path.join(model_dir, ".git")
@@ -487,7 +569,7 @@ def main():
                 else:
                     print_color(f"保留 {git_dir} 目录。", YELLOW)
 
-        print_color("下载完成。", GREEN)
+        print_color("所有操作完成。", GREEN)
     except Exception as e:
         print_color(f"发生错误: {e}", RED)
     finally:
