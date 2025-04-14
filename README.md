@@ -1,6 +1,6 @@
-# Huggingface Model Downloader (hfd.py)
+# Huggingface Downloader (hfd)
 
-`hfd.py` 是一个 Python 脚本，用于从 Hugging Face 或 ModelScope 下载模型或数据集，基于 [padeoe](https://gist.github.com/padeoe/697678ab8e528b85a2a7bddafea1fa4f) 的 `hfd.sh` 开发。
+`hfd` 是一个 Python 脚本，用于从 Hugging Face 或 ModelScope 下载模型或数据集，基于 [padeoe](https://gist.github.com/padeoe/697678ab8e528b85a2a7bddafea1fa4f) 的 `hfd.sh` 开发。
 
 ## 亮点
 
@@ -18,20 +18,43 @@
 - 🔄 **浅克隆默认**: 默认使用 `--depth=1` 进行浅克隆，减小下载体积，可通过 `--full_clone` 关闭。
 - 💾 **保留 Git 历史默认**: 默认下载完成后保留 `.git` 目录，可通过 `--remove_git` 选择移除。
 
-## 使用方法
+## 安装
 
-首先，下载 `hfd.py` 并确保 `Python`, `aria2c` (推荐) 或 `wget`, `git` 以及 `git-lfs` 已安装。
+确保你已安装 `Python (>=3.8)`, `git`, `git-lfs` 和 `aria2c` (推荐) 或 `wget`。
 
-> Ubuntu 下安装 `aria2c` `git` `git-lfs`
+> Ubuntu 下安装依赖:
 > ```bash
 > sudo apt update
-> sudo apt install aria2 git git-lfs
+> sudo apt install git git-lfs aria2c python3-pip python3-venv
 > ```
+
+然后，可以通过 pip 安装本工具：
+
+**从本地源码安装 (开发模式):**
+
+```bash
+# 克隆仓库 (如果还没克隆)
+# git clone https://github.com/your_username/huggingface-downloader.git
+# cd huggingface-downloader
+
+# 安装 (使用 -e 进行可编辑安装)
+pip install -e .
+```
+
+**或者，如果发布到 PyPI:**
+
+```bash
+pip install huggingface-downloader
+```
+
+## 使用方法
+
+安装完成后，可以直接使用 `hfd` 命令。
 
 ### 命令行参数
 
 ```sh
-python hfd.py -h
+hfd -h
 ```
 
 #### 参数说明
@@ -44,62 +67,64 @@ python hfd.py -h
 - `--hf_token`: (可选) Hugging Face 或 ModelScope 令牌，用于认证。
 - `--endpoint`: (可选) 指定源平台的镜像站点 (例如 `https://hf-mirror.com` 或 `https://modelscope.cn/api`)。如果未指定，脚本会尝试使用环境变量 `HF_ENDPOINT` 或 `MODELSCOPE_ENDPOINT`，最后回退到官方地址 (`https://huggingface.co` 或 `https://modelscope.cn`)。
 - `--tool`: (可选) 下载工具，可以是 `aria2c`（默认）或 `wget`。
-- `-x`: (可选) `aria2c` 的下载线程数，默认为 4。
+- `-x`, `--threads`: (可选) `aria2c` 的下载线程数，默认为 4。
 - `--dataset`: (可选) 标志，表示下载数据集而不是模型。
 - `--local_dir`: (可选) 本地存储模型或数据集的目录路径。默认为仓库名称。
 - `--max_retries`: (可选) 下载单个文件时的最大重试次数，默认为 10。
 - `--verify_hash`: (可选) 启用哈希验证。脚本会检查本地已存在文件的哈希值是否与 LFS 记录匹配，并在本次运行中下载完成后，校验新下载文件的哈希值。
 - `--full_clone`: (可选) 执行完整克隆（下载所有 Git 历史记录），而不是默认的浅克隆 (`--depth=1`)。
 - `--remove_git`: (可选) 下载完成后移除 `.git` 目录。默认情况下会保留 `.git` 目录。
+- `--download_workers`: (可选) 用于并行下载的最大工作线程数 (默认为 8)。
+- `--verify_workers`: (可选) 用于并行哈希校验的最大工作线程数 (默认为 4)。
 
 #### 示例
 
 下载 Hugging Face 模型 (默认浅克隆, 保留 .git):
 
 ```bash
-python hfd.py bigscience/bloom-560m
+hfd bigscience/bloom-560m
 ```
 
 下载 ModelScope 模型:
 
 ```bash
-python hfd.py modelscope/Llama-2-7b-ms --source modelscope
+hfd modelscope/Llama-2-7b-ms --source modelscope
 ```
 
 下载需要登录的模型 (Hugging Face):
 
 ```bash
-python hfd.py meta-llama/Llama-2-7b --hf_username YOUR_HF_USERNAME_NOT_EMAIL --hf_token YOUR_HF_TOKEN
+hfd meta-llama/Llama-2-7b --hf_username YOUR_HF_USERNAME_NOT_EMAIL --hf_token YOUR_HF_TOKEN
 ```
 
 下载模型并排除某些文件:
 
 ```bash
-python hfd.py bigscience/bloom-560m --exclude *.safetensors
+hfd bigscience/bloom-560m --exclude *.safetensors
 ```
 
-使用 `aria2c` 和 8 线程下载:
+使用 `aria2c` 和 8 线程下载，增加下载并发数:
 
 ```bash
-python hfd.py bigscience/bloom-560m -x 8
+hfd bigscience/bloom-560m --threads 8 --download_workers 16
 ```
 
 只下载特定目录中的文件:
 
 ```bash
-python hfd.py intfloat/e5-base-v2 --include "onnx/*"
+hfd intfloat/e5-base-v2 --include "onnx/*"
 ```
 
 使用镜像站点 (Hugging Face):
 
 ```bash
-python hfd.py intfloat/e5-base-v2 --endpoint https://hf-mirror.com
+hfd intfloat/e5-base-v2 --endpoint https://hf-mirror.com
 ```
 
 进行完整克隆并移除 Git 历史:
 
 ```bash
-python hfd.py intfloat/e5-base-v2 --full_clone --remove_git
+hfd intfloat/e5-base-v2 --full_clone --remove_git
 ```
 
 在Git仓库中使用：
@@ -113,7 +138,7 @@ python hfd.py intfloat/e5-base-v2 --full_clone --remove_git
 下载过程中，将显示文件 URL、下载进度、重试次数等信息
 
 ```bash
-$ python hfd.py jxu124/OpenX-Embodiment -x 4 --dataset --local_dir /data/open-x-embd-ds
+$ hfd jxu124/OpenX-Embodiment -x 4 --dataset --local_dir /data/open-x-embd-ds
 
 ...
 [#f142e5 20MiB/717MiB(2%) CN:4 DL:2.0MiB ETA:5m32s]第 1 次尝试失败: 命令失败: aria2c --console-log-level=error --file-allocation=none -x 4 -s 4 -k 1M -c "https://hf-mirror.com/datasets/jxu124/OpenX-Embodiment/resolve/main/kuka/kuka_00106.tar" -d "kuka" -o "kuka_00106.tar"

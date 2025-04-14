@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "huggingface-downloader"
+version = "0.1.0" 
+description = "从 Hugging Face 或 ModelScope 使用提供的 repo ID 下载模型或数据集。"
+readme = "README.md"
+license = "MIT" # 或者你选择的其他许可证
+authors = [
+    { name = "Your Name", email = "your.email@example.com" }, # 替换成你的信息
+]
+requires-python = ">=3.8" # 根据你的代码依赖确定最低 Python 版本
+# 外部依赖
+# dependencies = [
+#     "requests",
+# ]
+
+# 定义命令行入口点
+[project.scripts]
+hfd = "hfd.cli:run" # 安装后，hfd 命令将执行 hfd.cli模块中的 run 函数
+
+[project.urls]
+Homepage = "https://github.com/SevenFo/huggingface-downloader" # 替换成你的仓库地址
+Repository = "https://github.com/SevenFo/huggingface-downloader"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",      # 测试框架
+    "pytest-mock>=3.0", # 用于模拟对象
+    "build",            # 用于构建包
+    # "ruff",           # 可选：代码格式化和 Linting
+    # "mypy",           # 可选：静态类型检查
+]
+
+[tool.hatch.build.targets.wheel]
+# 指定包 "hfd" 位于 "src" 目录下
+packages = ["src/hfd"]
