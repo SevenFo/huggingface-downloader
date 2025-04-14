@@ -9,6 +9,7 @@ import time
 import signal
 import hashlib
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import urllib.parse
 
 # 终端输出颜色定义
 RED = "\033[0;31m"
@@ -27,10 +28,17 @@ def print_color(message, color=NC):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="从 Hugging Face 使用提供的 repo ID 下载模型或数据集。"
+        description="从 Hugging Face 或 ModelScope 使用提供的 repo ID 下载模型或数据集。"  # Updated description
     )
     parser.add_argument(
-        "repo_id", help="Hugging Face repo ID，格式为 'org/repo_name'。"
+        "repo_id",
+        help="Hugging Face 或 ModelScope repo ID，格式通常为 'org/repo_name'。",  # Updated help
+    )
+    parser.add_argument(
+        "--source",
+        choices=["huggingface", "modelscope"],
+        default="huggingface",
+        help="选择下载源平台。默认为 huggingface。",
     )
     parser.add_argument("--include", nargs="+", help="要包含下载的文件模式。")
     parser.add_argument(
@@ -38,12 +46,15 @@ def parse_args():
         nargs="+",
         help="要排除下载的文件模式。",
     )
-    parser.add_argument("--hf_username", help="Hugging Face 用户名，用于认证。")
-    parser.add_argument("--hf_token", help="Hugging Face 令牌，用于认证。")
+    parser.add_argument(
+        "--hf_username", help="Hugging Face 或 ModelScope 用户名，用于认证。"
+    )  # Updated help
+    parser.add_argument(
+        "--hf_token", help="Hugging Face 或 ModelScope 令牌，用于认证。"
+    )  # Updated help
     parser.add_argument(
         "--endpoint",
-        default=os.environ.get("HF_ENDPOINT", "https://huggingface.co"),
-        help="Hugging Face 端点，默认为环境变量 HF_ENDPOINT 或 https://huggingface.co",
+        help="覆盖默认的源平台端点 (例如 https://huggingface.co 或 https://modelscope.cn)。",
     )
     parser.add_argument(
         "--tool",
@@ -94,6 +105,12 @@ def ensure_ownership(repo_dir):
     # 确保目录存在
     if not os.path.isdir(repo_dir):
         print_color(f"目录 {repo_dir} 不存在，无法确保所有权", RED)
+        return
+
+    # 检查是否为有效的 Git 仓库目录
+    git_dir_path = os.path.join(repo_dir, ".git")
+    if not os.path.isdir(git_dir_path):
+        print_color(f"{repo_dir} 不是一个有效的 Git 仓库目录，跳过所有权检查。", YELLOW)
         return
 
     try:
@@ -189,6 +206,22 @@ def check_file_hash(file_info):
     return (file_path, is_file_downloaded(file_path, expected_hash))
 
 
+def get_download_url(endpoint, repo_id, file_path, source, is_dataset):
+    """根据源平台生成下载 URL"""
+    encoded_file_path = urllib.parse.quote(file_path, safe="")  # URL encode file path
+    if source == "huggingface":
+        return f"{endpoint}/{repo_id}/resolve/main/{encoded_file_path}"
+    elif source == "modelscope":
+        # ModelScope API 路径不同
+        api_base = "models" if not is_dataset else "datasets"
+        # ModelScope 可能不需要 repo_id 中的 'modelscope/' 或 'datasets/' 前缀
+        # 假设 repo_id 已经是 'org/repo_name' 格式
+        # ModelScope URL 格式: https://modelscope.cn/api/v1/{api_base}/{repo_id}/repo?Revision=master&FilePath={file_path}
+        return f"{endpoint}/api/v1/{api_base}/{repo_id}/repo?Revision=master&FilePath={encoded_file_path}"
+    else:
+        raise ValueError(f"不支持的源: {source}")
+
+
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     args = parse_args()
@@ -197,10 +230,39 @@ def main():
     check_command("git-lfs")
     check_command(args.tool)
 
-    # 使用传入的endpoint参数
-    hf_endpoint = args.endpoint
-    repo_id = f"datasets/{args.repo_id}" if args.dataset else args.repo_id
-    local_dir = args.local_dir or repo_id.split("/")[-1]
+    # 根据源设置默认端点
+    default_endpoints = {
+        "huggingface": os.environ.get("HF_ENDPOINT", "https://huggingface.co"),
+        "modelscope": os.environ.get("MODELSCOPE_ENDPOINT", "https://modelscope.cn"),
+    }
+
+    base_endpoint = default_endpoints.get(args.source)
+    if not base_endpoint:
+        print_color(f"错误：不支持的源 '{args.source}'", RED)
+        sys.exit(1)
+
+    # 使用用户提供的端点或基于源的默认端点
+    endpoint = args.endpoint or base_endpoint
+    print_color(f"使用端点: {endpoint} (来源: {args.source})", BLUE)
+
+    # 根据源和类型调整 repo_id
+    raw_repo_id = args.repo_id  # 原始用户输入 'org/repo_name'
+    repo_id_for_clone = raw_repo_id  # 在这里初始化 repo_id_for_clone
+    if args.source == "huggingface":
+        repo_id_for_url = f"datasets/{raw_repo_id}" if args.dataset else raw_repo_id
+    elif args.source == "modelscope":
+        # ModelScope API URL 通常只需要 'org/repo_name'
+        # 但 git clone 可能需要前缀，这里我们为 clone URL 添加前缀
+        repo_id_for_clone = (
+            f"datasets/{raw_repo_id}" if args.dataset else f"modelscope/{raw_repo_id}"
+        )
+        repo_id_for_url = raw_repo_id  # API URL 不需要前缀
+    else:
+        # Fallback or error
+        repo_id_for_url = raw_repo_id
+        repo_id_for_clone = raw_repo_id
+
+    local_dir = args.local_dir or raw_repo_id.split("/")[-1]
 
     # 获取当前工作目录以便后续恢复
     original_dir = os.getcwd()
@@ -232,9 +294,14 @@ def main():
             ensure_ownership(model_dir)
             run_command("GIT_LFS_SKIP_SMUDGE=1 git pull")
         else:
-            repo_url = f"{hf_endpoint}/{repo_id}"
+            # 使用 repo_id_for_clone 进行克隆
+            repo_url = f"{endpoint}/{repo_id_for_clone}"
             if args.hf_username and args.hf_token:
-                repo_url = f"https://{args.hf_username}:{args.hf_token}@{hf_endpoint.replace('https://', '')}/{repo_id}"
+                # 移除 https:// 前缀以插入凭据
+                endpoint_no_proto = endpoint.replace("https://", "").replace(
+                    "http://", ""
+                )
+                repo_url = f"https://{args.hf_username}:{args.hf_token}@{endpoint_no_proto}/{repo_id_for_clone}"
 
             # 如果目录已存在但不是Git仓库，提醒用户
             if os.path.exists(model_dir):
@@ -317,7 +384,10 @@ def main():
             file_path = parts[-1]  # 获取文件路径
 
             is_downloaded = status == "*"
-            url = f"{hf_endpoint}/{repo_id}/resolve/main/{file_path}"
+            # 使用 repo_id_for_url 生成下载链接
+            url = get_download_url(
+                endpoint, repo_id_for_url, file_path, args.source, args.dataset
+            )
 
             if include_patterns and not matches_patterns(file_path, include_patterns):
                 print_color(f"跳过 {file_path} (不匹配包含模式)", YELLOW)
@@ -357,7 +427,9 @@ def main():
                     partial_hash = next(
                         info[1] for info in file_checks if info[0] == file_path
                     )
-                    url = f"{hf_endpoint}/{repo_id}/resolve/main/{file_path}"
+                    url = get_download_url(
+                        endpoint, repo_id_for_url, file_path, args.source, args.dataset
+                    )
                     print_color(f"文件 {file_path} 校验失败，添加到下载队列。", YELLOW)
                     files_to_download.append(
                         (
