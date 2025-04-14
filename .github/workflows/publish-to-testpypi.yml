@@ -1,0 +1,41 @@
+name: Publish Python Package to TestPyPI
+
+on:
+  push:
+    tags:
+      - 'test_v*' # 只在 test_v* 标签时触发
+
+jobs:
+  deploy-test:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypitest
+      url: https://test.pypi.org/p/siky-hfd 
+    permissions:
+      contents: read # 只需要读取权限来检出代码
+      # 如果 pypitest 环境使用 OIDC 受信任发布，则需要 id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build
+
+    - name: Build package
+      run: python -m build
+
+    - name: Publish package to TestPyPI
+      # 只发布到 TestPyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        # 使用 TestPyPI 的 API Token (如果 pypitest 环境没有配置 OIDC)
+        password: ${{ secrets.PYPI_API_TOKEN }}
+        repository_url: https://test.pypi.org/legacy/ # 指定 TestPyPI 地址

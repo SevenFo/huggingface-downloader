@@ -3,15 +3,15 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "huggingface-downloader"
+name = "siky-hfd" 
 version = "0.1.0" 
 description = "从 Hugging Face 或 ModelScope 使用提供的 repo ID 下载模型或数据集。"
 readme = "README.md"
-license = "MIT" # 或者你选择的其他许可证
+license = "MIT" 
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }, # 替换成你的信息
+    { name = "siky", email = "siky47@outlook.com" }, 
 ]
-requires-python = ">=3.8" # 根据你的代码依赖确定最低 Python 版本
+requires-python = ">=3.8" 
 # 外部依赖
 # dependencies = [
 #     "requests",
@@ -22,8 +22,9 @@ requires-python = ">=3.8" # 根据你的代码依赖确定最低 Python 版本
 hfd = "hfd.cli:run" # 安装后，hfd 命令将执行 hfd.cli模块中的 run 函数
 
 [project.urls]
-Homepage = "https://github.com/SevenFo/huggingface-downloader" # 替换成你的仓库地址
+Homepage = "https://github.com/SevenFo/huggingface-downloader"
 Repository = "https://github.com/SevenFo/huggingface-downloader"
+PyPI = "https://pypi.org/project/siky-hfd/"
 
 [project.optional-dependencies]
 dev = [
@@ -35,5 +36,4 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-# 指定包 "hfd" 位于 "src" 目录下
 packages = ["src/hfd"]
