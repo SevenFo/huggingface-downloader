@@ -80,17 +80,19 @@ def parse_args():
         help="最大重试次数，默认为 10。",
     )
     parser.add_argument("--verify_hash", action="store_true", help="启用哈希验证。")
+    # 使用 snake_case: --remove_git
     parser.add_argument(
-        "--remove_git",
+        "--remove_git",  # 使用下划线
         action="store_true",
-        help="下载完成后移除.git目录，避免Git仓库嵌套问题。",
-        default=False,
+        help="下载完成后移除.git目录。",
+        default=False,  # 默认不移除
     )
+    # 使用 snake_case: --full_clone
     parser.add_argument(
-        "--depth-1",
+        "--full_clone",  # 使用下划线
         action="store_true",
-        help="使用 --depth=1 进行浅克隆，只下载最新提交，减小下载体积。默认启用。",
-        default=True,
+        help="执行完整克隆（下载所有历史记录），而不是默认的浅克隆 (--depth=1)。",
+        default=False,  # 默认不执行完整克隆，即浅克隆
     )
     return parser.parse_args()
 
@@ -314,17 +316,19 @@ def main():
                     print_color("操作已取消。", RED)
                     return
 
-            # 显示浅克隆提示
-            if args.depth_1:
+            # 显示克隆提示，并根据 --full_clone 调整命令
+            if not args.full_clone:  # 检查 args.full_clone
                 print_color(
-                    "使用 --depth=1 进行浅克隆，只下载最新提交，减小下载体积。", YELLOW
+                    "默认使用 --depth=1 进行浅克隆。使用 --full_clone 进行完整克隆。",
+                    YELLOW,
                 )
                 clone_command = (
                     f"GIT_LFS_SKIP_SMUDGE=1 git clone --depth=1 {repo_url} {local_dir}"
                 )
-            else:
+            else:  # 用户指定了 --full_clone
                 print_color(
-                    "进行完整克隆，下载所有历史记录。这可能需要更长的时间。", YELLOW
+                    "进行完整克隆 (--full_clone)，下载所有历史记录。这可能需要更长的时间。",
+                    YELLOW,
                 )
                 clone_command = (
                     f"GIT_LFS_SKIP_SMUDGE=1 git clone {repo_url} {local_dir}"
@@ -336,10 +340,8 @@ def main():
             if not os.path.isdir(model_dir):
                 print_color(f"无法找到 {model_dir} 目录，克隆可能失败", RED)
                 return
-
             os.chdir(model_dir)
             ensure_ownership(model_dir)
-
             # 检查git lfs是否可用并处理文件
             try:
                 for file in (
@@ -354,7 +356,6 @@ def main():
             except subprocess.CalledProcessError as e:
                 print_color(f"获取LFS文件列表失败: {e}", RED)
                 return
-
         include_patterns = args.include or []
         exclude_patterns = args.exclude or []
 
@@ -379,25 +380,20 @@ def main():
             parts = file.split(" ")
             if len(parts) < 3:
                 continue
-
             partial_hash = parts[0]  # 获取 Git LFS 的部分哈希
             status = parts[1]  # 获取文件状态
             file_path = parts[-1]  # 获取文件路径
-
             is_downloaded = status == "*"
             # 使用 repo_id_for_url 生成下载链接
             url = get_download_url(
                 endpoint, repo_id_for_url, file_path, args.source, args.dataset
             )
-
             if include_patterns and not matches_patterns(file_path, include_patterns):
                 print_color(f"跳过 {file_path} (不匹配包含模式)", YELLOW)
                 continue
             if exclude_patterns and matches_patterns(file_path, exclude_patterns):
                 print_color(f"跳过 {file_path} (匹配排除模式)", YELLOW)
                 continue
-
-            # 修改这里的逻辑
             if args.verify_hash:
                 if is_downloaded:
                     print_color(
@@ -473,7 +469,6 @@ def main():
                             files_to_verify_after_download.append(
                                 (file_path, partial_hash)
                             )
-
         # 2. 下载需要下载或校验失败的文件
         total_files_to_download = len(files_to_download)
         if total_files_to_download == 0:
@@ -484,7 +479,6 @@ def main():
             start_time = time.time()
             completed_files = 0
             download_successful_files = []  # 记录成功下载的文件路径
-
             with ProcessPoolExecutor(max_workers=32) as executor:
                 # ... (下载文件的 futures 提交代码保持不变) ...
                 futures = [
@@ -493,7 +487,6 @@ def main():
                     )
                     for url, file_path, tool, threads, token, max_retries in files_to_download
                 ]
-
                 for i, future in enumerate(as_completed(futures)):
                     # 获取对应任务的文件路径
                     original_task_info = files_to_download[i]
@@ -517,7 +510,6 @@ def main():
                             estimated_remaining_time = (
                                 avg_time_per_file * remaining_files
                             )
-
                             print_color(
                                 f"已完成 {completed_files}/{total_files_to_download} 个文件下载。"
                                 f"用时：{total_elapsed_time:.2f} 秒。"
@@ -531,7 +523,6 @@ def main():
                             )
                     except Exception as e:
                         print_color(f"下载文件 {current_file_path} 失败: {e}", RED)
-
         # 3. 校验刚刚下载完成的文件 (如果开启了 --verify_hash)
         if args.verify_hash and files_to_verify_after_download:
             print_color("开始校验新下载文件的哈希...", BLUE)
@@ -558,16 +549,26 @@ def main():
             else:
                 print_color("没有成功下载的文件需要进行下载后校验。", YELLOW)
 
-        if args.remove_git:
+        # 根据 --remove_git 决定是否移除 .git 目录
+        if args.remove_git:  # 仅在用户指定时移除
             git_dir = os.path.join(model_dir, ".git")
             if os.path.isdir(git_dir):
-                print_color(f"移除 {git_dir} 目录以避免Git仓库嵌套问题。", YELLOW)
-                user_input = input("是否继续? [y/N]: ").lower()
+                print_color(
+                    f"根据 --remove_git 选项，准备移除 {git_dir} 目录。", YELLOW
+                )
+                user_input = input("确认移除 .git 目录? [y/N]: ").lower()
                 if user_input == "y":
-                    shutil.rmtree(git_dir)
-                    print_color(f"已移除 {git_dir} 目录。", GREEN)
+                    try:
+                        shutil.rmtree(git_dir)
+                        print_color(f"已移除 {git_dir} 目录。", GREEN)
+                    except Exception as e:
+                        print_color(f"移除 {git_dir} 目录失败: {e}", RED)
                 else:
-                    print_color(f"保留 {git_dir} 目录。", YELLOW)
+                    print_color(f"取消移除，保留 {git_dir} 目录。", YELLOW)
+            else:
+                print_color(f"未找到 {git_dir} 目录，无需移除。", YELLOW)
+        else:  # 默认行为：保留 .git
+            print_color(f"默认保留 .git 目录。使用 --remove_git 进行移除。", YELLOW)
 
         print_color("所有操作完成。", GREEN)
     except Exception as e:
