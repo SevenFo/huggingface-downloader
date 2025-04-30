@@ -34,7 +34,7 @@
 
 ```bash
 # 克隆仓库 (如果还没克隆)
-# git clone https://github.com/your_username/huggingface-downloader.git
+# git clone https://github.com/SevenFo/huggingface-downloader.git
 # cd huggingface-downloader
 
 # 安装 (使用 -e 进行可编辑安装)
