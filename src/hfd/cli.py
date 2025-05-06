@@ -146,7 +146,7 @@ def main():
     elif args.source == "modelscope":
         # MS clone URL 需要前缀，下载 URL 不需要
         repo_id_for_clone = (
-            f"datasets/{raw_repo_id}" if args.dataset else f"modelscope/{raw_repo_id}"
+            f"datasets/{raw_repo_id}" if args.dataset else f"models/{raw_repo_id}"
         )
         repo_id_for_url = raw_repo_id  # API URL 不需要前缀
     print_color(f"仓库 ID (克隆): {repo_id_for_clone}", BLUE)
